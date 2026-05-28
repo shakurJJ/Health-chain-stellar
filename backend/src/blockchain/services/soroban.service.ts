@@ -179,12 +179,16 @@ export class SorobanService {
    */
   async getQueueMetrics(): Promise<QueueMetrics> {
     const detailed = await this.queueMetricsService.getDetailedMetrics();
+    
+    // Calculate processing rate from successful jobs over time since reset
+    const sinceMs = Date.now() - Date.parse(detailed.since);
+    const processingRate = sinceMs > 0 ? (detailed.counters.success / (sinceMs / 1000)) : null;
 
     return {
       queueDepth: detailed.live.waiting + detailed.live.active,
       failedJobs: detailed.live.failed,
       dlqCount: detailed.live.dlqDepth,
-      processingRate: 0, // Calculated separately if needed
+      processingRate,
       counters: detailed.counters,
       timings: detailed.timings,
     };

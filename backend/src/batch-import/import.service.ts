@@ -281,6 +281,8 @@ export class ImportService {
 
       try {
         await this.dataSource.transaction(async (manager) => {
+          let chunkCommitted = 0;
+          
           for (const row of chunk) {
             // Re-check cross-batch dedup inside transaction
             const existingHash = await manager.findOne(ImportCommittedHashEntity, {
@@ -318,9 +320,10 @@ export class ImportService {
 
             chunkCommitted++;
           }
+          
+          // Update counters within transaction
+          totalCommitted += chunkCommitted;
         });
-
-        totalCommitted += chunkCommitted;
         lastGoodChunk = ci;
 
         // Persist checkpoint after each successful chunk
