@@ -33,6 +33,24 @@ import { ImportValidationService } from './import-validation.service';
 const DEFAULT_CHUNK_SIZE = 100;
 const MAX_RETRIES = 3;
 
+const PROTOTYPE_POISON_KEYS = new Set([
+  '__proto__', 'constructor', 'prototype',
+  'toString', 'valueOf', 'hasOwnProperty',
+  'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString',
+]);
+
+const CSV_HEADER_ALLOWLIST: Record<ImportEntityType, ReadonlySet<string>> = {
+  [ImportEntityType.ORGANIZATION]: new Set([
+    'name', 'type', 'email', 'phone', 'address', 'city', 'country', 'latitude', 'longitude',
+  ]),
+  [ImportEntityType.RIDER]: new Set([
+    'userId', 'vehicleType', 'vehicleNumber', 'licenseNumber', 'latitude', 'longitude',
+  ]),
+  [ImportEntityType.INVENTORY]: new Set([
+    'bloodType', 'region', 'quantity',
+  ]),
+};
+
 export interface ImportQualityReport {
   batchId: string;
   entityType: ImportEntityType;
@@ -105,7 +123,7 @@ export class ImportService {
       return this.batchRepo.findOne({ where: { id: existing.id } }) as Promise<ImportBatchEntity>;
     }
 
-    const rows = this.parseCsv(csvBuffer);
+    const rows = this.parseCsv(csvBuffer, entityType);
     if (rows.length === 0) throw new BadRequestException('CSV file is empty');
 
     // ── Per-batch dedup sets ───────────────────────────────────────────────
@@ -626,14 +644,34 @@ export class ImportService {
   }
 
   /** Minimal CSV parser — handles quoted fields */
-  private parseCsv(buffer: Buffer): Record<string, unknown>[] {
+  private parseCsv(buffer: Buffer, entityType: ImportEntityType): Record<string, unknown>[] {
     const text = buffer.toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = text.split('\n').filter((l) => l.trim());
     if (lines.length < 2) return [];
-    const headers = this.splitCsvLine(lines[0]);
+
+    const headers = this.splitCsvLine(lines[0]).map((h) => h.trim());
+    const allowedHeaders = CSV_HEADER_ALLOWLIST[entityType];
+
+    for (const header of headers) {
+      if (PROTOTYPE_POISON_KEYS.has(header)) {
+        throw new BadRequestException(
+          `CSV import rejected: header "${header}" is a reserved prototype key.`,
+        );
+      }
+      if (!allowedHeaders.has(header)) {
+        throw new BadRequestException(
+          `CSV import rejected: header "${header}" is not valid for entity type "${entityType}".`,
+        );
+      }
+    }
+
     return lines.slice(1).map((line) => {
       const values = this.splitCsvLine(line);
-      return Object.fromEntries(headers.map((h, i) => [h.trim(), values[i]?.trim() ?? '']));
+      const record = Object.create(null) as Record<string, string>;
+      headers.forEach((h, i) => {
+        record[h] = values[i]?.trim() ?? '';
+      });
+      return record;
     });
   }
 
